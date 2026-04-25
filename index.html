@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Pixel Forest Runner</title>
+  <style>
+    :root {
+      --ink: #1a2342;
+      --sky1: #79c9ff;
+      --sky2: #d9f5ff;
+      --gold: #ffd74a;
+      --pink: #ff79c8;
+      --violet: #7d4dff;
+      --grass: #32d26f;
+      --dirt: #8b5b34;
+      --panel: rgba(10, 22, 46, .78);
+    }
+    * { box-sizing: border-box; touch-action: manipulation; }
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #11172c; color: white; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+    body { display: grid; place-items: center; }
+    .wrap { width: min(100vw, 1180px); height: min(100vh, 720px); position: relative; border: 4px solid #273b70; border-radius: 18px; overflow: hidden; background: linear-gradient(var(--sky1), var(--sky2) 58%, #93e77a 59%, #4abb53); box-shadow: 0 20px 60px rgba(0,0,0,.4); }
+    canvas { width: 100%; height: 100%; display: block; image-rendering: pixelated; }
+    .hud { position: absolute; inset: 14px 14px auto 14px; display: flex; gap: 10px; align-items: center; justify-content: space-between; pointer-events: none; font-weight: 800; text-shadow: 0 2px 0 #10204d; }
+    .hud .left, .hud .right { display: flex; gap: 10px; flex-wrap: wrap; }
+    .pill { background: var(--panel); border: 2px solid rgba(255,255,255,.24); border-radius: 999px; padding: 8px 12px; box-shadow: inset 0 2px 0 rgba(255,255,255,.12); }
+    .title { position: absolute; inset: 0; display: grid; place-items: center; background: radial-gradient(circle at 50% 25%, rgba(255,255,255,.16), transparent 28%), rgba(8, 18, 38, .62); text-align: center; padding: 24px; }
+    .card { max-width: 680px; padding: 28px; border-radius: 24px; background: rgba(8, 20, 45, .82); border: 3px solid rgba(255,255,255,.24); box-shadow: 0 18px 70px rgba(0,0,0,.45); }
+    h1 { margin: 0 0 8px; font-size: clamp(28px, 6vw, 58px); color: var(--gold); letter-spacing: .03em; text-shadow: 0 4px 0 #7b4c11; }
+    p { line-height: 1.7; margin: 8px 0; }
+    button { appearance: none; border: 0; border-radius: 999px; padding: 12px 20px; margin-top: 14px; font: inherit; font-weight: 900; color: #1b2345; background: linear-gradient(#fff47c, #ffbd35); box-shadow: 0 6px 0 #9b5e13, 0 12px 24px rgba(0,0,0,.24); cursor: pointer; }
+    button:active { transform: translateY(4px); box-shadow: 0 2px 0 #9b5e13; }
+    .controls { position: absolute; left: 14px; right: 14px; bottom: 14px; display: none; justify-content: space-between; pointer-events: none; }
+    .cluster { display: flex; gap: 12px; }
+    .ctl { width: 64px; height: 64px; border-radius: 22px; background: rgba(12, 26, 58, .62); border: 2px solid rgba(255,255,255,.32); color: white; font-size: 24px; font-weight: 900; pointer-events: auto; user-select: none; display: grid; place-items: center; }
+    .ctl:active, .ctl.down { background: rgba(255,215,74,.88); color: #253053; }
+    .note { font-size: 13px; opacity: .84; }
+    @media (max-width: 760px), (pointer: coarse) { .controls { display: flex; } .hud { font-size: 13px; inset: 10px 10px auto; } .pill { padding: 6px 9px; } .wrap { border-radius: 0; border: 0; width: 100vw; height: 100vh; } }
+  </style>
+</head>
+<body>
+  <main class="wrap" aria-label="Pixel Forest Runner game">
+    <canvas id="game" width="960" height="540"></canvas>
+    <div class="hud">
+      <div class="left">
+        <div class="pill">⭐ <span id="score">0</span></div>
+        <div class="pill">🪙 <span id="coins">0</span></div>
+        <div class="pill">❤️ <span id="lives">3</span></div>
+      </div>
+      <div class="right">
+        <div class="pill">⏱ <span id="time">90</span></div>
+      </div>
+    </div>
+    <section class="title" id="overlay">
+      <div class="card">
+        <h1>PIXEL FOREST RUNNER</h1>
+        <p>紫髪の小さなヒロインを走らせて、コインと星を集めながら森のゴール旗を目指そう。</p>
+        <p class="note">操作: ← → / A D で移動、Space / ↑ / W でジャンプ。キノコは上から踏むと倒せます。</p>
+        <button id="start">START</button>
+      </div>
+    </section>
+    <div class="controls" aria-hidden="true">
+      <div class="cluster">
+        <div class="ctl" data-key="left">◀</div>
+        <div class="ctl" data-key="right">▶</div>
+      </div>
+      <div class="cluster">
+        <div class="ctl" data-key="jump">⤒</div>
+      </div>
+    </div>
+  </main>
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const $ = id => document.getElementById(id);
+  const hud = { score: $('score'), coins: $('coins'), lives: $('lives'), time: $('time') };
+  const overlay = $('overlay');
+  const W = canvas.width, H = canvas.height, TILE = 42;
+  const keys = { left:false, right:false, jump:false };
+  const state = { running:false, won:false, score:0, coins:0, lives:3, time:90, camera:0, last:0, acc:0 };
+  const levelWidth = 2550;
+  const gravity = 1850;
+  const solids = [];
+  const coins = [];
+  const stars = [];
+  const enemies = [];
+  const particles = [];
+  const flag = { x: 2385, y: 284, w: 26, h: 150 };
+  const player = { x:80, y:120, w:30, h:46, vx:0, vy:0, onGround:false, inv:0, face:1 };
+
+  function resetWorld(full=true) {
+    solids.length = coins.length = stars.length = enemies.length = particles.length = 0;
+    state.camera = 0; state.time = 90; state.won = false; state.running = false;
+    if (full) { state.score = 0; state.coins = 0; state.lives = 3; }
+    Object.assign(player, { x:80, y:120, vx:0, vy:0, onGround:false, inv:0, face:1 });
+    addGround(0, 452, 14); addGround(650, 452, 9); addGround(1120, 452, 7); addGround(1540, 452, 11); addGround(2120, 452, 12);
+    addBlock(355, 330, '?'); addBlock(410, 330, 'brick'); addBlock(465, 330, '?'); addBlock(785, 278, 'brick'); addBlock(827, 278, '?'); addBlock(1270, 335, '?'); addBlock(1323, 335, 'brick'); addBlock(1778, 290, '?'); addBlock(1840, 290, 'brick');
+    platform(565, 380, 3); platform(940, 350, 4); platform(1465, 366, 3); platform(1995, 338, 4);
+    [260,315,610,735,1005,1180,1490,1608,1730,2012,2070,2250].forEach((x,i)=> coins.push({x,y: i%3 ? 402 : 322, r:11, got:false, t:i}));
+    stars.push({x:468,y:292,r:13,got:false,vy:0}); stars.push({x:1783,y:252,r:13,got:false,vy:0});
+    enemies.push(mush(690,408, -1)); enemies.push(mush(1215,408, 1)); enemies.push(mush(1670,408, -1)); enemies.push(mush(2190,408, 1));
+    updateHud();
+  }
+  function addGround(x,y,n){ for(let i=0;i<n;i++) solids.push({x:x+i*TILE,y,w:TILE,h:88,type:'ground',hit:false}); }
+  function addBlock(x,y,type){ solids.push({x,y,w:42,h:42,type,hit:false}); }
+  function platform(x,y,n){ for(let i=0;i<n;i++) solids.push({x:x+i*TILE,y,w:42,h:24,type:'platform',hit:false}); }
+  function mush(x,y,dir){ return {x,y,w:34,h:30,vx:dir*55,alive:true,squish:0}; }
+
+  function startGame(){ resetWorld(true); state.running = true; overlay.style.display = 'none'; state.last = performance.now(); requestAnimationFrame(loop); }
+  $('start').addEventListener('click', startGame);
+
+  addEventListener('keydown', e => { if(['ArrowLeft','a','A'].includes(e.key)) keys.left=true; if(['ArrowRight','d','D'].includes(e.key)) keys.right=true; if([' ','ArrowUp','w','W'].includes(e.key)){ keys.jump=true; e.preventDefault(); } if(e.key==='Enter' && overlay.style.display!=='none') startGame(); });
+  addEventListener('keyup', e => { if(['ArrowLeft','a','A'].includes(e.key)) keys.left=false; if(['ArrowRight','d','D'].includes(e.key)) keys.right=false; if([' ','ArrowUp','w','W'].includes(e.key)) keys.jump=false; });
+  document.querySelectorAll('.ctl').forEach(el => {
+    const k = el.dataset.key;
+    const on = e => { e.preventDefault(); keys[k]=true; el.classList.add('down'); };
+    const off = e => { e.preventDefault(); keys[k]=false; el.classList.remove('down'); };
+    el.addEventListener('pointerdown', on); el.addEventListener('pointerup', off); el.addEventListener('pointercancel', off); el.addEventListener('pointerleave', off);
+  });
+
+  function loop(now){
+    if(!state.running) return;
+    let dt = Math.min(.033, (now - state.last) / 1000 || .016); state.last = now; state.acc += dt;
+    state.time = Math.max(0, 90 - Math.floor((now - (state.startedAt || (state.startedAt = now))) / 1000));
+    update(dt); draw(); updateHud();
+    if(state.time <= 0) hurt(true);
+    requestAnimationFrame(loop);
+  }
+
+  function update(dt){
+    const speed = 255;
+    player.vx = (keys.right - keys.left) * speed;
+    if(player.vx) player.face = Math.sign(player.vx);
+    if(keys.jump && player.onGround){ player.vy = -690; player.onGround = false; pop(player.x+15, player.y+44, '#fff'); }
+    player.vy += gravity * dt;
+    move(player, dt);
+    if(player.y > H + 140) hurt(true);
+    player.inv = Math.max(0, player.inv - dt);
+    state.camera = Math.max(0, Math.min(levelWidth - W, player.x - W * .42));
+
+    for(const e of enemies){
+      if(!e.alive){ e.squish -= dt; continue; }
+      e.vy = (e.vy || 0) + gravity*dt; e.x += e.vx*dt; e.y += e.vy*dt;
+      for(const s of solids){ if(rects(e,s)){ if(e.vx>0) e.x=s.x-e.w; else e.x=s.x+s.w; e.vx *= -1; } }
+      e.y = Math.min(e.y, 422); e.vy = 0;
+      if(rects(player,e) && player.inv<=0){
+        if(player.vy > 170 && player.y + player.h - e.y < 22){ e.alive=false; e.squish=.5; player.vy=-430; state.score += 300; pop(e.x+16,e.y,'#ffd74a'); }
+        else hurt(false);
+      }
+    }
+    for(const c of coins){ if(!c.got && dist(player.x+15, player.y+22, c.x, c.y) < 30){ c.got=true; state.coins++; state.score += 100; pop(c.x,c.y,'#ffd74a'); } }
+    for(const s of stars){ if(!s.got && dist(player.x+15, player.y+22, s.x, s.y) < 32){ s.got=true; state.score += 750; player.inv=3.5; pop(s.x,s.y,'#ff79c8'); } }
+    particles.forEach(p=>{ p.x+=p.vx*dt; p.y+=p.vy*dt; p.vy+=900*dt; p.life-=dt; });
+    for(let i=particles.length-1;i>=0;i--) if(particles[i].life<=0) particles.splice(i,1);
+    if(player.x + player.w > flag.x && player.y + player.h > flag.y){ win(); }
+  }
+
+  function move(o,dt){
+    o.x += o.vx * dt;
+    for(const s of solids){ if(rects(o,s)){ if(o.vx>0) o.x=s.x-o.w; if(o.vx<0) o.x=s.x+s.w; } }
+    o.y += o.vy * dt; o.onGround = false;
+    for(const s of solids){ if(rects(o,s)){
+      if(o.vy > 0){ o.y=s.y-o.h; o.vy=0; o.onGround=true; }
+      else if(o.vy < 0){ o.y=s.y+s.h; o.vy=80; bump(s); }
+    }}
+    o.x = Math.max(0, Math.min(levelWidth - o.w, o.x));
+  }
+  function bump(s){
+    if(s.hit) return; s.hit=true;
+    if(s.type==='?') { state.score += 50; if(Math.random()>.45) coins.push({x:s.x+21,y:s.y-20,r:11,got:false,t:10}); else stars.push({x:s.x+21,y:s.y-18,r:13,got:false,vy:0}); pop(s.x+21,s.y,'#fff47c'); }
+  }
+  function hurt(fall){
+    if(player.inv>0 && !fall) return;
+    state.lives--; updateHud();
+    if(state.lives <= 0){ showEnd('GAME OVER', 'もう一度挑戦して、旗までたどり着こう。'); return; }
+    Object.assign(player, { x:Math.max(60, state.camera+70), y:80, vx:0, vy:0, inv:1.8 });
+  }
+  function win(){ if(state.won) return; state.won=true; state.score += state.time*20 + state.coins*25; showEnd('STAGE CLEAR!', `スコア ${state.score} 点。森の旗に到着しました。`); }
+  function showEnd(title, msg){ state.running=false; state.startedAt=0; overlay.innerHTML = `<div class="card"><h1>${title}</h1><p>${msg}</p><p class="note">Enter またはボタンでリスタート</p><button id="restart">RESTART</button></div>`; overlay.style.display='grid'; document.getElementById('restart').onclick=startGame; }
+  function updateHud(){ hud.score.textContent=state.score; hud.coins.textContent=state.coins; hud.lives.textContent=state.lives; hud.time.textContent=state.time; }
+
+  function draw(){
+    ctx.clearRect(0,0,W,H); sky();
+    ctx.save(); ctx.translate(-state.camera,0);
+    drawHills(); drawFlag(); solids.forEach(drawSolid); coins.forEach(drawCoin); stars.forEach(drawStar); enemies.forEach(drawEnemy); drawPlayer(); particles.forEach(drawParticle);
+    ctx.restore();
+    if(player.inv>0){ ctx.fillStyle='rgba(255,255,255,.08)'; ctx.fillRect(0,0,W,H); }
+  }
+  function sky(){
+    const g=ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,'#6ec8ff'); g.addColorStop(.62,'#d9f7ff'); g.addColorStop(.63,'#a6ea6e'); g.addColorStop(1,'#5bbd55'); ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+    for(const c of [{x:90,y:84},{x:430,y:58},{x:760,y:104}]) cloud(c.x - state.camera*.18, c.y);
+  }
+  function cloud(x,y){ ctx.fillStyle='rgba(255,255,255,.9)'; [0,28,58,88].forEach((dx,i)=>ctx.fillRect(x+dx,y+(i%2)*8,34,18)); }
+  function drawHills(){
+    ctx.fillStyle='#7bc3e7'; poly([[0,355],[210,172],[415,355]]); poly([[360,355],[620,130],[850,355]]); poly([[780,355],[1020,176],[1240,355]]); poly([[1260,355],[1510,155],[1760,355]]); poly([[1740,355],[2020,122],[2320,355]]);
+    for(let x=40;x<levelWidth;x+=115) tree(x,360 + (x%3)*7);
+  }
+  function poly(points){ ctx.beginPath(); points.forEach((p,i)=> i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1])); ctx.closePath(); ctx.fill(); }
+  function tree(x,y){ ctx.fillStyle='#7a4a2a'; ctx.fillRect(x+15,y-20,12,48); ctx.fillStyle='#20754b'; ctx.fillRect(x,y-66,42,30); ctx.fillRect(x+6,y-94,30,32); ctx.fillRect(x+12,y-120,20,30); }
+  function drawFlag(){ ctx.fillStyle='#815026'; ctx.fillRect(flag.x,flag.y,8,170); ctx.fillStyle='#ff4c7d'; ctx.fillRect(flag.x+8,flag.y+10,74,42); ctx.fillStyle='#fff'; ctx.fillRect(flag.x+22,flag.y+21,18,12); ctx.fillStyle='#3cd572'; ctx.fillRect(flag.x-24,452,70,14); }
+  function drawSolid(s){
+    if(s.type==='ground'){ ctx.fillStyle='#3bd86f'; ctx.fillRect(s.x,s.y,s.w,s.h); ctx.fillStyle='#8b5b34'; ctx.fillRect(s.x,s.y+14,s.w,s.h-14); ctx.fillStyle='rgba(0,0,0,.12)'; for(let y=s.y+25;y<s.y+s.h;y+=18) ctx.fillRect(s.x,y,s.w,3); }
+    else { ctx.fillStyle=s.type==='?' ? (s.hit?'#c78c37':'#ffd45a') : '#b66a39'; ctx.fillRect(s.x,s.y+(s.hit?3:0),s.w,s.h); ctx.strokeStyle='rgba(55,28,18,.45)'; ctx.lineWidth=3; ctx.strokeRect(s.x+2,s.y+(s.hit?3:0)+2,s.w-4,s.h-4); if(s.type==='?'){ ctx.fillStyle='#7a4513'; ctx.font='900 25px monospace'; ctx.fillText('?',s.x+13,s.y+29+(s.hit?3:0)); } }
+  }
+  function drawCoin(c){ if(c.got) return; ctx.save(); ctx.translate(c.x,c.y+Math.sin(state.acc*6+c.t)*4); ctx.fillStyle='#ffd74a'; ctx.fillRect(-8,-12,16,24); ctx.fillStyle='#fff47c'; ctx.fillRect(-3,-9,5,18); ctx.restore(); }
+  function drawStar(s){ if(s.got) return; ctx.save(); ctx.translate(s.x,s.y+Math.sin(state.acc*7)*5); ctx.fillStyle='#ffef6c'; starPath(0,0,s.r,5); ctx.fill(); ctx.restore(); }
+  function drawEnemy(e){ if(!e.alive && e.squish<=0) return; const h=e.alive?e.h:12; ctx.fillStyle='#7c4b2a'; ctx.fillRect(e.x+5,e.y+12,e.w-10,h-10); ctx.fillStyle='#b56936'; ctx.fillRect(e.x,e.y,e.w,18); ctx.fillStyle='#fff0c9'; ctx.fillRect(e.x+8,e.y+5,6,5); ctx.fillRect(e.x+22,e.y+5,6,5); ctx.fillStyle='#28190f'; ctx.fillRect(e.x+10,e.y+20,4,4); ctx.fillRect(e.x+22,e.y+20,4,4); }
+  function drawPlayer(){
+    const x=player.x,y=player.y, blink=player.inv>0 && Math.floor(state.acc*16)%2===0; if(blink) return;
+    ctx.fillStyle='#2b2550'; ctx.fillRect(x+8,y+10,22,30); ctx.fillStyle='#8d5cff'; ctx.fillRect(x+1,y+2,30,30); ctx.fillRect(x+4,y+28,26,14); ctx.fillStyle='#ffd3bd'; ctx.fillRect(x+8,y+9,18,18); ctx.fillStyle='#1c1740'; ctx.fillRect(x+(player.face>0?21:8),y+15,4,4); ctx.fillStyle='#f5f0ff'; ctx.fillRect(x+8,y+30,20,12); ctx.fillStyle='#3c5cff'; ctx.fillRect(x+6,y+42,8,6); ctx.fillRect(x+21,y+42,8,6); ctx.fillStyle=player.inv>0?'#ffef6c':'#ff79c8'; ctx.fillRect(x+2,y+31,5,9); ctx.fillRect(x+28,y+31,5,9);
+  }
+  function drawParticle(p){ ctx.globalAlpha=Math.max(0,p.life); ctx.fillStyle=p.color; ctx.fillRect(p.x,p.y,6,6); ctx.globalAlpha=1; }
+  function starPath(x,y,r,n){ ctx.beginPath(); for(let i=0;i<n*2;i++){ const a=-Math.PI/2+i*Math.PI/n; const rr=i%2?r:r*.45; ctx.lineTo(x+Math.cos(a)*rr,y+Math.sin(a)*rr); } ctx.closePath(); }
+  function pop(x,y,color){ for(let i=0;i<10;i++) particles.push({x,y,vx:(Math.random()-.5)*170,vy:-Math.random()*210-40,life:.55+Math.random()*.35,color}); }
+  function rects(a,b){ return a.x < b.x+b.w && a.x+a.w > b.x && a.y < b.y+b.h && a.y+a.h > b.y; }
+  function dist(ax,ay,bx,by){ return Math.hypot(ax-bx,ay-by); }
+  resetWorld(true); draw();
+})();
+</script>
+</body>
+</html>
