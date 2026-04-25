@@ -77,8 +77,8 @@
   const hud = { score: $('score'), coins: $('coins'), lives: $('lives'), time: $('time') };
   const overlay = $('overlay');
   const W = canvas.width, H = canvas.height, TILE = 42;
-  const keys = { left:false, right:false, jump:false };
-  const state = { running:false, won:false, score:0, coins:0, lives:3, time:90, camera:0, last:0, acc:0 };
+  const keys = { left:false, right:false, jump:false, wantJump:false };
+  const state = { running:false, won:false, score:0, coins:0, lives:3, time:90, camera:0, last:0, acc:0, startedAt:0, raf:0 };
   const levelWidth = 2550;
   const gravity = 1850;
   const solids = [];
@@ -87,7 +87,7 @@
   const enemies = [];
   const particles = [];
   const flag = { x: 2385, y: 284, w: 26, h: 150 };
-  const player = { x:80, y:120, w:30, h:46, vx:0, vy:0, onGround:false, inv:0, face:1 };
+  const player = { x:80, y:120, w:30, h:46, vx:0, vy:0, onGround:false, inv:0, face:1, coyote:0, jumpBuffer:0, checkpointX:80 };
   const art = Object.fromEntries(Object.entries({
     playerIdle: 'assets/player-idle.png',
     playerRun: 'assets/player-run.png',
@@ -106,7 +106,7 @@
     solids.length = coins.length = stars.length = enemies.length = particles.length = 0;
     state.camera = 0; state.time = 90; state.won = false; state.running = false;
     if (full) { state.score = 0; state.coins = 0; state.lives = 3; }
-    Object.assign(player, { x:80, y:120, vx:0, vy:0, onGround:false, inv:0, face:1 });
+    Object.assign(player, { x:80, y:120, vx:0, vy:0, onGround:false, inv:0, face:1, coyote:0, jumpBuffer:0, checkpointX:80 });
     addGround(0, 452, 14); addGround(650, 452, 9); addGround(1120, 452, 7); addGround(1540, 452, 11); addGround(2120, 452, 12);
     addBlock(355, 330, '?'); addBlock(410, 330, 'brick'); addBlock(465, 330, '?'); addBlock(785, 278, 'brick'); addBlock(827, 278, '?'); addBlock(1270, 335, '?'); addBlock(1323, 335, 'brick'); addBlock(1778, 290, '?'); addBlock(1840, 290, 'brick');
     platform(565, 380, 3); platform(940, 350, 4); platform(1465, 366, 3); platform(1995, 338, 4);
@@ -118,16 +118,16 @@
   function addGround(x,y,n){ for(let i=0;i<n;i++) solids.push({x:x+i*TILE,y,w:TILE,h:88,type:'ground',hit:false}); }
   function addBlock(x,y,type){ solids.push({x,y,w:42,h:42,type,hit:false}); }
   function platform(x,y,n){ for(let i=0;i<n;i++) solids.push({x:x+i*TILE,y,w:42,h:24,type:'platform',hit:false}); }
-  function mush(x,y,dir){ return {x,y,w:34,h:30,vx:dir*55,alive:true,squish:0}; }
+  function mush(x,y,dir){ return {x,y,w:34,h:30,vx:dir*55,vy:0,alive:true,squish:0,onGround:false}; }
 
-  function startGame(){ resetWorld(true); state.running = true; overlay.style.display = 'none'; state.last = performance.now(); requestAnimationFrame(loop); }
+  function startGame(){ resetWorld(true); state.running = true; state.startedAt = performance.now(); overlay.style.display = 'none'; state.last = state.startedAt; if(state.raf) cancelAnimationFrame(state.raf); state.raf = requestAnimationFrame(loop); }
   $('start').addEventListener('click', startGame);
 
-  addEventListener('keydown', e => { if(['ArrowLeft','a','A'].includes(e.key)) keys.left=true; if(['ArrowRight','d','D'].includes(e.key)) keys.right=true; if([' ','ArrowUp','w','W'].includes(e.key)){ keys.jump=true; e.preventDefault(); } if(e.key==='Enter' && overlay.style.display!=='none') startGame(); });
+  addEventListener('keydown', e => { if(['ArrowLeft','a','A'].includes(e.key)) keys.left=true; if(['ArrowRight','d','D'].includes(e.key)) keys.right=true; if([' ','ArrowUp','w','W'].includes(e.key)){ if(!keys.jump) keys.wantJump=true; keys.jump=true; e.preventDefault(); } if(e.key==='Enter' && overlay.style.display!=='none') startGame(); });
   addEventListener('keyup', e => { if(['ArrowLeft','a','A'].includes(e.key)) keys.left=false; if(['ArrowRight','d','D'].includes(e.key)) keys.right=false; if([' ','ArrowUp','w','W'].includes(e.key)) keys.jump=false; });
   document.querySelectorAll('.ctl').forEach(el => {
     const k = el.dataset.key;
-    const on = e => { e.preventDefault(); keys[k]=true; el.classList.add('down'); };
+    const on = e => { e.preventDefault(); if(k==='jump' && !keys[k]) keys.wantJump=true; keys[k]=true; el.classList.add('down'); };
     const off = e => { e.preventDefault(); keys[k]=false; el.classList.remove('down'); };
     el.addEventListener('pointerdown', on); el.addEventListener('pointerup', off); el.addEventListener('pointercancel', off); el.addEventListener('pointerleave', off);
   });
@@ -135,30 +135,35 @@
   function loop(now){
     if(!state.running) return;
     let dt = Math.min(.033, (now - state.last) / 1000 || .016); state.last = now; state.acc += dt;
-    state.time = Math.max(0, 90 - Math.floor((now - (state.startedAt || (state.startedAt = now))) / 1000));
+    state.time = Math.max(0, 90 - Math.floor((now - state.startedAt) / 1000));
     update(dt); draw(); updateHud();
     if(state.time <= 0) hurt(true);
-    requestAnimationFrame(loop);
+    state.raf = requestAnimationFrame(loop);
   }
 
   function update(dt){
     const speed = 255;
     player.vx = (keys.right - keys.left) * speed;
     if(player.vx) player.face = Math.sign(player.vx);
-    if(keys.jump && player.onGround){ player.vy = -690; player.onGround = false; pop(player.x+15, player.y+44, '#fff'); }
+    if(keys.wantJump){ player.jumpBuffer = .16; keys.wantJump = false; }
+    player.jumpBuffer = Math.max(0, player.jumpBuffer - dt);
+    player.coyote = player.onGround ? .10 : Math.max(0, player.coyote - dt);
+    if(player.jumpBuffer > 0 && (player.onGround || player.coyote > 0)){
+      player.vy = -690; player.onGround = false; player.coyote = 0; player.jumpBuffer = 0;
+      pop(player.x+15, player.y+44, '#fff');
+    }
     player.vy += gravity * dt;
     move(player, dt);
+    if(player.onGround && player.x > player.checkpointX + 260) player.checkpointX = player.x;
     if(player.y > H + 140) hurt(true);
     player.inv = Math.max(0, player.inv - dt);
     state.camera = Math.max(0, Math.min(levelWidth - W, player.x - W * .42));
 
     for(const e of enemies){
       if(!e.alive){ e.squish -= dt; continue; }
-      e.vy = (e.vy || 0) + gravity*dt; e.x += e.vx*dt; e.y += e.vy*dt;
-      for(const s of solids){ if(rects(e,s)){ if(e.vx>0) e.x=s.x-e.w; else e.x=s.x+s.w; e.vx *= -1; } }
-      e.y = Math.min(e.y, 422); e.vy = 0;
+      moveEnemy(e, dt);
       if(rects(player,e) && player.inv<=0){
-        if(player.vy > 170 && player.y + player.h - e.y < 22){ e.alive=false; e.squish=.5; player.vy=-430; state.score += 300; pop(e.x+16,e.y,'#ffd74a'); }
+        if(player.vy > 170 && player.y + player.h - e.y < 24){ e.alive=false; e.squish=.5; player.vy=-430; state.score += 300; pop(e.x+16,e.y,'#ffd74a'); }
         else hurt(false);
       }
     }
@@ -179,6 +184,21 @@
     }}
     o.x = Math.max(0, Math.min(levelWidth - o.w, o.x));
   }
+  function moveEnemy(e,dt){
+    e.vy += gravity * dt; e.onGround = false;
+    e.x += e.vx * dt;
+    for(const s of solids){ if(rects(e,s)){ if(e.vx>0) e.x=s.x-e.w; else e.x=s.x+s.w; e.vx *= -1; } }
+    e.y += e.vy * dt;
+    for(const s of solids){ if(rects(e,s)){
+      if(e.vy > 0){ e.y=s.y-e.h; e.vy=0; e.onGround=true; }
+      else if(e.vy < 0){ e.y=s.y+s.h; e.vy=0; }
+    }}
+    const aheadX = e.vx > 0 ? e.x + e.w + 6 : e.x - 6;
+    const footY = e.y + e.h + 8;
+    const hasFloor = solids.some(s => aheadX >= s.x && aheadX <= s.x+s.w && footY >= s.y && footY <= s.y+s.h+8);
+    if(e.onGround && !hasFloor) e.vx *= -1;
+    if(e.y > H + 80) e.alive = false;
+  }
   function bump(s){
     if(s.hit) return; s.hit=true;
     if(s.type==='?') { state.score += 50; if(Math.random()>.45) coins.push({x:s.x+21,y:s.y-20,r:11,got:false,t:10}); else stars.push({x:s.x+21,y:s.y-18,r:13,got:false,vy:0}); pop(s.x+21,s.y,'#fff47c'); }
@@ -187,10 +207,10 @@
     if(player.inv>0 && !fall) return;
     state.lives--; updateHud();
     if(state.lives <= 0){ showEnd('GAME OVER', 'もう一度挑戦して、旗までたどり着こう。'); return; }
-    Object.assign(player, { x:Math.max(60, state.camera+70), y:80, vx:0, vy:0, inv:1.8 });
+    Object.assign(player, { x:Math.max(60, player.checkpointX-40), y:80, vx:0, vy:0, inv:1.8, coyote:0, jumpBuffer:0 });
   }
   function win(){ if(state.won) return; state.won=true; state.score += state.time*20 + state.coins*25; showEnd('STAGE CLEAR!', `スコア ${state.score} 点。森の旗に到着しました。`); }
-  function showEnd(title, msg){ state.running=false; state.startedAt=0; overlay.innerHTML = `<div class="card"><h1>${title}</h1><p>${msg}</p><p class="note">Enter またはボタンでリスタート</p><button id="restart">RESTART</button></div>`; overlay.style.display='grid'; document.getElementById('restart').onclick=startGame; }
+  function showEnd(title, msg){ state.running=false; keys.left=keys.right=keys.jump=keys.wantJump=false; state.startedAt=0; overlay.innerHTML = `<div class="card"><h1>${title}</h1><p>${msg}</p><p class="note">Enter またはボタンでリスタート</p><button id="restart">RESTART</button></div>`; overlay.style.display='grid'; document.getElementById('restart').onclick=startGame; }
   function updateHud(){ hud.score.textContent=state.score; hud.coins.textContent=state.coins; hud.lives.textContent=state.lives; hud.time.textContent=state.time; }
 
   function draw(){
